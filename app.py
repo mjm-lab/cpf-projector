@@ -602,7 +602,7 @@ def project(
                 if topup_stop_option == "After N years":
                     if (year - start_year) >= int(topup_years_limit):
                         allow_topup = False
-                elif topup_stop_option == "From age X":
+                elif topup_stop_option == "After age X":
                     if age > int(topup_stop_age):
                         allow_topup = False
 
@@ -1357,3 +1357,4 @@ if run_btn:
 
 else:
     st.info("Set your inputs in the sidebar and click **Run Projection**.")
+
