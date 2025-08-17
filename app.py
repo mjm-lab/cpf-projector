@@ -30,8 +30,8 @@ st.markdown(
         display: inline-block;
         padding: 2px 8px;
         border-radius: 999px;
-        background: #eef2ff;
-        color: #3730a3;
+        background: #ecfeff;
+        color: #0369a1;
         font-size: 12px;
         margin-left: 8px;
     }
@@ -63,11 +63,7 @@ def ow_ceiling_monthly(year: int):
 
 ANNUAL_TW_CEILING = 102000.0
 
-FRS_KNOWN = {
-    2025: 213000.0,
-    2026: 220400.0,
-    2027: 228200.0,
-}
+FRS_KNOWN = {2025: 213000.0, 2026: 220400.0, 2027: 228200.0}
 FRS_growth_pct_default = 0.035
 
 BHS_KNOWN = {2025: 75500.0}
@@ -75,16 +71,9 @@ BHS_growth_pct_default = 0.05
 
 # ---- Cohort BHS (fixed at 65) ----
 COHORT_BHS_BY_YEAR65 = {
-    2025: 75500.0,
-    2024: 71500.0,
-    2023: 68500.0,
-    2022: 66000.0,
-    2021: 63000.0,
-    2020: 60000.0,
-    2019: 57200.0,
-    2018: 54500.0,
-    2017: 52000.0,
-    2016: 49800.0
+    2025: 75500.0, 2024: 71500.0, 2023: 68500.0, 2022: 66000.0,
+    2021: 63000.0, 2020: 60000.0, 2019: 57200.0, 2018: 54500.0,
+    2017: 52000.0, 2016: 49800.0
 }
 
 # ==============================
@@ -108,9 +97,9 @@ ESCALATING_RATE = 0.02             # +2% per year escalation after start
 BASIC_PREMIUM_FRAC = 0.10          # fraction of RA paid as premium at start for Basic (approx)
 
 # Defaults so project() can be reused
-m_topup_month = 1; m_deduct_month = 1; mshl_month = 1
+m_topup_month = 1
 topup_OA = topup_SA_RA = topup_MA = 0.0
-deduct_OA = deduct_MA = 0.0
+# Removed: yearly MA/OA deduction globals (simplified)
 
 # ==============================
 # Helper functions
@@ -146,7 +135,7 @@ def get_frs_for_cohort(year55: int, frs_growth_pct: float):
         return FRS_KNOWN[year55]
     last_year = max(FRS_KNOWN.keys())
     frs = FRS_KNOWN[last_year]
-    for y in range(last_year+1, year55+1):
+    for _ in range(last_year+1, year55+1):
         frs *= (1 + frs_growth_pct)
     return round(frs, 2)
 
@@ -155,7 +144,7 @@ def get_frs_for_year(year: int, frs_growth_pct: float) -> float:
         return FRS_KNOWN[year]
     last_year = max(FRS_KNOWN.keys())
     frs = FRS_KNOWN[last_year]
-    for y in range(last_year + 1, year + 1):
+    for _ in range(last_year + 1, year + 1):
         frs *= (1 + frs_growth_pct)
     return round(frs, 2)
 
@@ -168,7 +157,7 @@ def get_bhs_for_year_with_cohort(dob: date, year: int, bhs_growth_pct: float):
         if year in BHS_KNOWN:
             return BHS_KNOWN[year]
         bhs = BHS_KNOWN[2025]
-        for y in range(2026, year + 1):
+        for _ in range(2026, year + 1):
             bhs *= (1 + bhs_growth_pct)
         return round(bhs, 2)
     else:
@@ -176,7 +165,7 @@ def get_bhs_for_year_with_cohort(dob: date, year: int, bhs_growth_pct: float):
             cohort_bhs = BHS_KNOWN[year65]
         elif year65 >= 2026:
             cohort_bhs = BHS_KNOWN[2025]
-            for y in range(2026, year65 + 1):
+            for _ in range(2026, year65 + 1):
                 cohort_bhs *= (1 + bhs_growth_pct)
         else:
             if year65 >= 2024:
@@ -230,7 +219,8 @@ def compute_extra_interest_distribution(age, oa, sa, ma, ra):
             ei["MA"] += take_ma * EXTRA_BELOW_55["tier1_rate"]
             remaining -= take_ma
     else:
-        t1 = 30000.0; t2 = 30000.0; oa_cap = 20000.0
+        t1 = 30000.0; t2 = 30000.0
+        oa_cap = 20000.0
         r1 = min(t1, ra); t1 -= r1
         o1 = min(t1, min(oa, oa_cap)); t1 -= o1
         s1 = min(t1, sa); t1 -= s1
@@ -246,12 +236,6 @@ def compute_extra_interest_distribution(age, oa, sa, ma, ra):
 
 # -------- Extra interest AFTER CPF LIFE starts --------
 def compute_extra_interest_distribution_after_cpf_life(age, oa, sa, ma, ra, premium_remaining):
-    """
-    After CPF LIFE starts (55+):
-      Priority is: RA -> premium -> OA -> MA.
-      Only the RA portion is credited to the member; the rest goes to the pooled fund.
-      Return dict with only RA populated (annualized).
-    """
     if age < 55:
         return compute_extra_interest_distribution(age, oa, sa, ma, ra)
     tier1 = min(ra, 30000.0) * 0.02
@@ -274,15 +258,6 @@ def spill_from_ma(age, ma_end, bhs, sa, oa, ra, frs_for_cohort):
     return ma_end, sa, oa, ra
 
 def transfer_to_ra_at_55(age_this_month, sa, oa, ra, transfer_target, cohort_frs):
-    """
-    At 55, create/boost RA.
-    If SA+OA < cohort FRS:
-      - Keep up to $5,000 in OA (move from SA if OA < 5k).
-      - Move the rest of SA+OA to RA.
-    Else:
-      - Move SA then OA to RA up to transfer_target (e.g. ERS),
-        then close SA into OA.
-    """
     if age_this_month < 55:
         return sa, oa, ra, 0.0
 
@@ -333,7 +308,7 @@ def transfer_to_ra_at_55(age_this_month, sa, oa, ra, transfer_target, cohort_frs
 
 
 # ==============================
-# IP helpers (your CSV schema)
+# IP helpers (CSV schema)
 # ==============================
 REQUIRED_IP_COLS = ["Insurer", "Ward Class", "Plan Type", "Plan Name", "Age", "Premium in MA", "Premium in Cash"]
 
@@ -342,15 +317,13 @@ def try_load_ip_csv(uploaded_file):
     Try to load from uploaded file first, else from local ./ip_premiums.csv, else /mnt/data/ip_premiums.csv.
     Returns (df or None, error_message or None)
     """
-    candidates = []
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
             return df, None
         except Exception as e:
             return None, f"Could not read the uploaded CSV: {e}"
-    candidates = ["ip_premiums.csv", "/mnt/data/ip_premiums.csv"]
-    for p in candidates:
+    for p in ["ip_premiums.csv", "/mnt/data/ip_premiums.csv"]:
         try:
             df = pd.read_csv(p)
             return df, None
@@ -405,7 +378,7 @@ def project(
     include_cpf_life: bool = True,
     cpf_life_plan: str = "Standard",  # "Standard","Escalating","Basic"
     payout_start_age: int = 65,
-    # Top-up stop controls (placeholders — not used here)
+    # Top-up stop controls
     topup_stop_option: str = "No limit",
     topup_years_limit: int = 0,
     topup_stop_age: int = 120,
@@ -414,19 +387,23 @@ def project(
     ltci_ma_premium: float = 0.0,
     ltci_pay_until_age: int = 67,
     ltci_month: int = 1,
-    # Integrated Shield Plan (your CSV schema)
+    # Integrated Shield Plan
     ip_enabled: bool = False,
     ip_df: pd.DataFrame | None = None,
     ip_insurer: str | None = None,
     ip_ward: str | None = None,
     ip_base_plan: str | None = "(None)",
     ip_rider: str | None = "(None)",
-    ip_month: int = 1,
-    # >>> OA withdrawals (55+)  [ADDED]
+    insurance_month: int = 1,   # <-- single month for MSHL & IP
+    # OA withdrawals (55+)
     withdraw_oa_enabled: bool = False,
     withdraw_oa_monthly_amount: float = 0.0,
     withdraw_oa_start_age: int = 55,
     withdraw_oa_end_age: int = 120,
+    # Housing loan (OA monthly) — start is implicit (now); stop by end age
+    house_enabled: bool = False,
+    house_monthly_amount: float = 0.0,
+    house_end_age: int = 120,
 ):
     dob = datetime.strptime(dob_str, "%Y-%m-%d").date()
     bal = opening_balances.copy()
@@ -437,7 +414,7 @@ def project(
     ra_transfer_target = cohort_ers
 
     # Track capital and CPF LIFE
-    ra_capital = bal.get("RA", 0.0)  # opening RA counts as capital
+    ra_capital = bal.get("RA", 0.0)
     prev_bal_for_interest = bal.copy()
 
     # CPF LIFE derived values
@@ -446,15 +423,17 @@ def project(
     ra_savings_for_basic = 0.0
     cpf_life_started = False
     monthly_start_payout = None
-    psa_year = dob.year + payout_start_age
-    psa_month = dob.month
+    psa_month = dob.month  # CPF LIFE start in birth month of chosen age
 
-    # OA-withdraw run-out tracker  [ADDED]
+    # OA run-out trackers
     oa_runs_out_age = None
     oa_runs_out_year = None
     oa_runs_out_month = None
 
-    # For payouts during monthly loop
+    house_runs_out_age = None
+    house_runs_out_year = None
+    house_runs_out_month = None
+
     start_year_sched = None
 
     for year in range(start_year, start_year + years):
@@ -507,7 +486,7 @@ def project(
                     bal["RA"] -= premium
                     ra_savings_for_basic = bal["RA"]
                 cpf_life_started = True
-                start_year_sched = year  # for escalation
+                start_year_sched = year
 
             # --- Monthly OW contributions ---
             working = age < retirement_age
@@ -561,19 +540,14 @@ def project(
                 if age >= 55:
                     ra_capital += to_RA_aw
 
-            # --- Deductions (once a year, chosen month) ---
-            if month == m_deduct_month:
-                take = min(bal["OA"], float(deduct_OA)); bal["OA"] -= take
-                take_ma = min(bal["MA"], float(deduct_MA)); bal["MA"] -= take_ma
-
             # --- MediShield Life premium (Age Next Birthday) ---
             mshl_paid_this_month = 0.0
             mshl_nominal_this_month = 0.0
-            if month == mshl_month:
+            if month == insurance_month:
                 anb = age + 1
                 prem = get_mshl_premium_by_anb(anb)
-                mshl_nominal_this_month = prem  # chart uses nominal
-                pay = min(bal["MA"], prem)      # actual deduction
+                mshl_nominal_this_month = prem
+                pay = min(bal["MA"], prem)
                 bal["MA"] -= pay
                 mshl_paid_this_month = pay
 
@@ -583,19 +557,18 @@ def project(
                 ltci_paid_this_month = min(bal["MA"], float(ltci_ma_premium))
                 bal["MA"] -= ltci_paid_this_month
 
-            # --- Integrated Shield Plan premiums (your CSV) ---
+            # --- Integrated Shield Plan premiums (CSV) ---
             ip_base_ma_paid = 0.0
             ip_base_cash = 0.0
             ip_rider_cash = 0.0
-            # nominal (for chart)
             ip_base_ma_nominal = 0.0
             ip_base_cash_nominal = 0.0
             ip_rider_cash_nominal = 0.0
 
-            if ip_enabled and (ip_df is not None) and (month == ip_month):
+            if ip_enabled and (ip_df is not None) and (month == insurance_month):
                 anb_ip = age + 1
 
-                # Base plan (MA + Cash as defined by plan)
+                # Base plan (MA + Cash)
                 if ip_base_plan and ip_base_plan != "(None)":
                     base_ma, base_cash = _ip_lookup_amounts(
                         ip_df, ip_insurer, ip_ward, ip_base_plan, "Base", anb_ip
@@ -618,7 +591,6 @@ def project(
                     ip_rider_cash_nominal = rider_cash
                     ip_rider_cash += rider_cash
 
-            # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
             # --- Top-ups (once a year, chosen month) ---
             topup_oa_applied = 0.0
             topup_sa_applied = 0.0
@@ -626,7 +598,6 @@ def project(
             topup_ma_applied = 0.0
 
             if month == m_topup_month:
-                # Respect stop rules
                 allow_topup = True
                 if topup_stop_option == "After N years":
                     if (year - start_year) >= int(topup_years_limit):
@@ -636,13 +607,11 @@ def project(
                         allow_topup = False
 
                 if allow_topup:
-                    # 1) OA top-up
                     if float(topup_OA) > 0.0:
                         add = float(topup_OA)
                         bal["OA"] += add
                         topup_oa_applied = add
 
-                    # 2) MA top-up up to BHS room
                     if float(topup_MA) > 0.0:
                         room_ma = max(0.0, bhs_this_year - bal["MA"])
                         add = min(float(topup_MA), room_ma)
@@ -650,7 +619,6 @@ def project(
                             bal["MA"] += add
                             topup_ma_applied = add
 
-                    # 3) SA / RA top-up rule
                     if float(topup_SA_RA) > 0.0:
                         if age < 55:
                             room_sa = max(0.0, cohort_frs - bal["SA"])
@@ -663,12 +631,10 @@ def project(
                             add = min(float(topup_SA_RA), room_ra_capital)
                             if add > 0:
                                 bal["RA"] += add
-                                ra_capital += add  # top-ups are capital
+                                ra_capital += add
                                 topup_ra_applied = add
-            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-            # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-            # --- Monthly OA withdrawal (55+)  [ADDED] ---
+            # --- Monthly OA withdrawal (55+) ---
             oa_withdrawal_paid = 0.0
             if (
                 withdraw_oa_enabled
@@ -681,15 +647,29 @@ def project(
                 bal["OA"] -= pay
                 oa_withdrawal_paid = pay
 
-                # Record the FIRST time OA hits 0 during the withdrawal window
                 if (oa_runs_out_age is None) and (bal["OA"] <= 1e-6):
                     oa_runs_out_age = int(age)
                     oa_runs_out_year = int(year)
                     oa_runs_out_month = int(month)
-            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+            # --- Monthly housing loan deduction from OA (simple, up to end age) ---
+            house_paid_this_month = 0.0
+            if (
+                house_enabled
+                and (age <= int(house_end_age))
+                and float(house_monthly_amount) > 0.0
+            ):
+                pay = min(bal["OA"], float(house_monthly_amount))
+                bal["OA"] -= pay
+                house_paid_this_month = pay
+
+                # First time OA hits zero during housing period
+                if (house_runs_out_age is None) and (bal["OA"] <= 1e-6):
+                    house_runs_out_age = int(age)
+                    house_runs_out_year = int(year)
+                    house_runs_out_month = int(month)
 
             # --- Monthly interest (on previous month-end) ---
-            # Base interest
             base_int_OA = prev_bal_for_interest.get("OA", 0.0) * (BASE_INT["OA"] / 12.0)
             base_int_SA = prev_bal_for_interest.get("SA", 0.0) * (BASE_INT["SA"] / 12.0)
             base_int_MA = prev_bal_for_interest.get("MA", 0.0) * (BASE_INT["MA"] / 12.0)
@@ -699,18 +679,14 @@ def project(
             else:
                 base_int_RA = prev_bal_for_interest.get("RA", 0.0) * (BASE_INT["RA"] / 12.0)
 
-            # Base interest crediting (use previous month-end balances)
             bal["OA"] += base_int_OA
-
             if age < 55:
                 bal["SA"] += base_int_SA
             else:
                 bal["RA"] += base_int_SA
-
             bal["MA"] += base_int_MA
             bal["RA"] += base_int_RA
 
-            # Extra interest
             if cpf_life_started:
                 ei = compute_extra_interest_distribution_after_cpf_life(
                     age,
@@ -735,13 +711,12 @@ def project(
                 bal["SA"] += ei["SA"] / 12.0
                 bal["MA"] += ei["MA"] / 12.0
             else:
-                bal["RA"] += ei["OA"] / 12.0          # OA extra interest → RA
+                bal["RA"] += ei["OA"] / 12.0
                 if not cpf_life_started:
-                    bal["MA"] += ei["MA"] / 12.0      # keep MA EI only before CPF LIFE
+                    bal["MA"] += ei["MA"] / 12.0
+            bal["RA"] += ei["RA"] / 12.0
 
-            bal["RA"] += ei["RA"] / 12.0  # RA EI always to RA
-
-            # --- CPF LIFE payouts (Basic only: draw from RA savings) ---
+            # --- CPF LIFE payouts (Basic only draws from RA savings) ---
             monthly_cpf_payout = 0.0
             if include_cpf_life and cpf_life_started:
                 years_since_start = (year - start_year_sched) if start_year_sched is not None else 0
@@ -766,7 +741,7 @@ def project(
                 )
                 ra_spill = max(0.0, bal["RA"] - ra_before); ra_capital += ra_spill
 
-            # --- Ensure SA remains closed after 55 (send any stray SA to RA) ---
+            # Ensure SA closed after 55
             if age >= 55 and bal["SA"] > 0:
                 bal["RA"] += bal["SA"]; bal["SA"] = 0.0
 
@@ -802,8 +777,9 @@ def project(
                 "Topup_RA_Applied": topup_ra_applied,
                 "Topup_MA_Applied": topup_ma_applied,
 
-                # OA withdrawal (monthly)  [ADDED]
+                # Withdrawals / Housing
                 "OA_Withdrawal_Paid": oa_withdrawal_paid,
+                "Housing_OA_Paid": house_paid_this_month,
             })
 
             prev_bal_for_interest = {"OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"]}
@@ -843,8 +819,9 @@ def project(
             "Topup_RA_Annual": grp["Topup_RA_Applied"].sum(),
             "Topup_MA_Annual": grp["Topup_MA_Applied"].sum(),
 
-            # OA withdrawal annual  [ADDED]
+            # OA withdrawal + Housing annual totals
             "OA_Withdrawal_Annual": grp["OA_Withdrawal_Paid"].sum(),
+            "Housing_OA_Annual": grp["Housing_OA_Paid"].sum(),
         })
     yearly_df = pd.DataFrame(yearly)
 
@@ -863,8 +840,7 @@ def project(
         sched = []
         beq_rows = []
 
-        # Bequest trackers (OA/MA intentionally excluded by design)
-        beq_premium = float(premium_pool)  # premium has no credited interest; its interest goes to pool
+        beq_premium = float(premium_pool)  # premium (no credited interest)
         beq_ra_savings = float(ra_savings_for_basic if cpf_life_plan == "Basic" else 0.0)
 
         def _annual_ra_interest(balance: float) -> float:
@@ -905,7 +881,7 @@ def project(
         cpf_life_df = pd.DataFrame(sched)
         bequest_df = pd.DataFrame(beq_rows)
 
-    # meta & OA run-out info
+    # meta & OA/housing run-out info
     meta = {
         "monthly_start_payout": monthly_start_payout,
         "oa_withdrawal_enabled": bool(withdraw_oa_enabled and withdraw_oa_monthly_amount > 0),
@@ -915,6 +891,13 @@ def project(
         "oa_withdrawal_amount": float(withdraw_oa_monthly_amount),
         "oa_withdrawal_start_age": int(withdraw_oa_start_age),
         "oa_withdrawal_end_age": int(withdraw_oa_end_age),
+
+        "house_enabled": bool(house_enabled and house_monthly_amount > 0),
+        "house_end_age": int(house_end_age),
+        "house_runs_out_age": house_runs_out_age,
+        "house_runs_out_year": house_runs_out_year,
+        "house_runs_out_month": house_runs_out_month,
+        "house_amount": float(house_monthly_amount),
     }
     return monthly_df, yearly_df, cohort_frs, cohort_ers, meta, cpf_life_df, bequest_df
 
@@ -925,17 +908,17 @@ def project(
 with st.sidebar:
     st.header("Inputs")
     name = st.text_input("Name", value="Member")
-    dob = st.date_input("Date of birth", value=date(1985,4,19), min_value=date(1900,1,1), max_value=date.today(), format="YYYY-MM-DD")
+    dob = st.date_input("Date of birth", value=date(1980,1,1), min_value=date(1900,1,1), max_value=date.today(), format="DD-MM-YYYY")
     gender = st.selectbox("Gender", ["M", "F"], index=1)
 
     start_year = st.number_input("Start year", min_value=2000, max_value=2100, value=date.today().year, step=1)
     years = st.slider("Years to project", min_value=5, max_value=100, value=60, step=1)
 
-    monthly_income = st.number_input("Monthly income (gross)", min_value=0.0, value=5500.0, step=100.0, format="%.2f")
-    annual_bonus = st.number_input("Annual bonus (gross)", min_value=0.0, value=5500.0, step=500.0, format="%.2f")
+    monthly_income = st.number_input("Monthly income (gross)", min_value=0.0, value=6000.0, step=100.0, format="%.2f")
+    annual_bonus = st.number_input("Annual bonus (gross)", min_value=0.0, value=6000.0, step=500.0, format="%.2f")
     salary_growth_pct = st.number_input("Salary growth % p.a.", min_value=0.0, max_value=0.20, value=0.03, step=0.01, format="%.2f")
     bonus_growth_pct = st.number_input("Bonus growth % p.a.", min_value=0.0, max_value=0.20, value=0.03, step=0.01, format="%.2f")
-    retirement_age = st.number_input("Retirement age (stop working contributions)", min_value=40, max_value=80, value=65, step=1, help="From this birthday onward, monthly salary and bonus contributions stop.")
+    retirement_age = st.number_input("Retirement age (stop working contributions)", min_value=40, max_value=80, value=60, step=1, help="From this birthday onward, monthly salary and bonus contributions stop.")
 
     st.subheader("Opening balances")
     col1, col2 = st.columns(2)
@@ -953,7 +936,7 @@ with st.sidebar:
         ers_factor = st.number_input("Desired RA opening amount (×FRS)", min_value=1.0, max_value=2.0, value=1.0, step=0.05, help="Target RA amount at age 55 as a multiple of FRS (1× to 2×).")
         st.caption("Choose your desired RA opening target between 1× and 2× FRS.")
 
-with st.expander("Top-ups & Deductions", expanded=False):
+with st.expander("Top-ups", expanded=False):
     st.caption("Amounts apply once every calendar year in the selected month. SA top-ups only when SA < FRS (cohort). RA top-ups allowed up to prevailing ERS, based on capital (excludes RA interest).")
     colA, colB = st.columns(2)
     with colA:
@@ -961,14 +944,9 @@ with st.expander("Top-ups & Deductions", expanded=False):
         topup_OA = st.number_input("Top-up to OA (yearly)", min_value=0.0, value=0.0, step=100.0)
         topup_SA_RA = st.number_input("Top-up to SA (if <55) / RA (if ≥55) (yearly)", min_value=0.0, value=0.0, step=100.0)
         topup_MA = st.number_input("Top-up to MA (yearly)", min_value=0.0, value=0.0, step=100.0)
-    with colB:
-        m_deduct_month = st.selectbox("Month to apply deductions", list(range(1,13)), index=0)
-        deduct_OA = st.number_input("Deduction from OA (yearly)", min_value=0.0, value=0.0, step=100.0, help="e.g., housing/education")
-        deduct_MA = st.number_input("Deduction from MA (yearly)", min_value=0.0, value=0.0, step=100.0, help="other medical uses")
-        mshl_month = st.selectbox("Month to deduct MediShield Life premium", list(range(1,13)), index=0)
 
     st.markdown("---")
-    topup_stop_option = st.selectbox("Top-up stop option", ["No limit", "After N years", "From age X"], index=0)
+    topup_stop_option = st.selectbox("Top-up stop option", ["No limit", "After N years", "After age X"], index=0)
     colY, colZ = st.columns(2)
     with colY:
         if topup_stop_option == "After N years":
@@ -976,7 +954,7 @@ with st.expander("Top-ups & Deductions", expanded=False):
         else:
             topup_years_limit = 0
     with colZ:
-        if topup_stop_option == "From age X":
+        if topup_stop_option == "After age X":
             topup_stop_age = st.number_input("Stop top-ups from this age (no top-ups when age > this)", min_value=30, max_value=100, value=65, step=1)
         else:
             topup_stop_age = 120
@@ -991,13 +969,14 @@ with st.expander("Long-term care insurance (paid from MA)", expanded=False):
     with col_lt3:
         ltci_pay_until_age = st.number_input("Premium payable up to age", min_value=30, max_value=120, value=67, step=1, disabled=not include_ltci)
 
-# ---- Integrated Shield Plan (your CSV schema) ----
-with st.expander("Integrated Shield Plan (IP)", expanded=False):
+# ---- Integrated Shield Plan (IP) + MSHL month unified ----
+with st.expander("Health Insurance (MSHL + Integrated Shield)", expanded=False):
+    insurance_month = st.selectbox("Month to deduct health insurance premiums (MSHL & IP)", list(range(1,13)), index=0)
+
     ip_enabled = st.checkbox("Include Integrated Shield Plan premiums", value=False)
     ip_upload = st.file_uploader("Upload IP premiums CSV", type=["csv"], help="Headers required: Insurer, Ward Class, Plan Type, Plan Name, Age, Premium in MA, Premium in Cash")
     ip_df, ip_load_msg = (None, None)
     ip_insurer = ip_ward = ip_base_plan = ip_rider = None
-    ip_month = 1
 
     if ip_enabled:
         ip_df, ip_load_msg = try_load_ip_csv(ip_upload)
@@ -1042,18 +1021,27 @@ with st.expander("Integrated Shield Plan (IP)", expanded=False):
             rider_opts = ["(None)"] + rider_opts
             ip_rider = st.selectbox("Rider", rider_opts, index=0)
 
-            ip_month = st.selectbox("Month to deduct IP", list(range(1,13)), index=0)
+            
+# ---- Housing loan (OA monthly) ----
+with st.expander("Housing loan (OA monthly)", expanded=False):
+    house_enabled = st.checkbox("Deduct housing repayment from OA every month", value=False)
+    col_h1, col_h2 = st.columns(2)
+    with col_h1:
+        house_monthly_amount = st.number_input("Monthly OA deduction (S$)", min_value=0.0, value=0.0, step=50.0, format="%.2f", disabled=not house_enabled)
+    with col_h2:
+        house_end_age = st.number_input("End age (stop housing deduction after this age)", min_value=18, max_value=100, value=60, step=1, disabled=not house_enabled)
 
-# ---- OA Withdrawal (55+) UI  [ADDED] ----
+# ---- OA Withdrawal (55+) ----
 with st.expander("OA Withdrawal (55+)", expanded=False):
     withdraw_oa_enabled = st.checkbox("Enable monthly OA withdrawal", value=False)
     col_w1, col_w2, col_w3 = st.columns(3)
     with col_w1:
         withdraw_oa_monthly_amount = st.number_input("Monthly OA withdrawal (S$)", min_value=0.0, value=0.0, step=50.0, format="%.2f", disabled=not withdraw_oa_enabled)
     with col_w2:
-        withdraw_oa_start_age = st.number_input("Start age (≥55)", min_value=55, max_value=120, value=55, step=1, disabled=not withdraw_oa_enabled)
+        withdraw_oa_start_age = st.number_input("Start age (≥55)", min_value=55, max_value=120, value=60, step=1, disabled=not withdraw_oa_enabled)
     with col_w3:
-        withdraw_oa_end_age = st.number_input("End age", min_value=55, max_value=120, value=120, step=1, disabled=not withdraw_oa_enabled)
+        withdraw_oa_end_age = st.number_input("End age", min_value=55, max_value=120, value=90, step=1, disabled=not withdraw_oa_enabled)
+
 
 with st.expander("CPF LIFE (payouts)", expanded=False):
     include_cpf_life = st.checkbox("Include CPF LIFE payouts in projection", value=True)
@@ -1097,42 +1085,59 @@ if run_btn:
         ltci_ma_premium=float(ltci_ma_premium),
         ltci_pay_until_age=int(ltci_pay_until_age),
         ltci_month=int(ltci_month),
-        # IP
+        # Insurance (MSHL + IP unified month)
         ip_enabled=bool(ip_enabled),
         ip_df=ip_df if ip_enabled else None,
         ip_insurer=ip_insurer,
         ip_ward=ip_ward,
         ip_base_plan=ip_base_plan,
         ip_rider=ip_rider,
-        ip_month=int(ip_month),
+        insurance_month=int(insurance_month),
         # OA Withdrawal
         withdraw_oa_enabled=bool(withdraw_oa_enabled),
         withdraw_oa_monthly_amount=float(withdraw_oa_monthly_amount),
         withdraw_oa_start_age=int(withdraw_oa_start_age),
         withdraw_oa_end_age=int(withdraw_oa_end_age),
+        # Housing (OA monthly)
+        house_enabled=bool(house_enabled),
+        house_monthly_amount=float(house_monthly_amount),
+        house_end_age=int(house_end_age),
     )
 
-    # Add Year-Age combined labels for charts/tables
-    yearly_df['YearAge'] = yearly_df.apply(lambda r: f"{int(r['Year'])} (Age {int(r['Age_end'])})", axis=1)
-    yearly_df['Year (Age)'] = yearly_df['YearAge']
-
-    # OA WITHDRAWAL ACTIVE ribbon  [ADDED]
+    # Banner ribbons
+    ribbons = []
+    if meta.get("house_enabled"):
+        ribbons.append(
+            f"Housing deduction ACTIVE — ${meta['house_amount']:,.0f}/mo, "
+            f"till Age {meta['house_end_age']}"
+        )
+    
     if meta.get("oa_withdrawal_enabled"):
-        ribbon_html = (
-            f"<span class='pill' style='background:#ecfeff;color:#0369a1;'>"
+        ribbons.append(
             f"OA withdrawal ACTIVE — ${meta['oa_withdrawal_amount']:,.0f}/mo, "
             f"Age {meta['oa_withdrawal_start_age']}–{meta['oa_withdrawal_end_age']}"
-            f"</span>"
         )
-        st.markdown(ribbon_html, unsafe_allow_html=True)
-        
-    # OA runs-out warning  [ADDED]
+    
+    if ribbons:
+        # NEW — space-separated, wrapped in a div
+        html_ribbons = " ".join([f"<span class='pill'>{r}</span>" for r in ribbons])
+        st.markdown(f"<div class='ribbon-row'>{html_ribbons}</div>", unsafe_allow_html=True)
+
+
+    # Warnings
+    if meta.get("house_enabled") and (meta.get("house_runs_out_age") is not None) and (meta["house_runs_out_age"] < meta["house_end_age"]):
+        st.warning(
+            f"OA runs out at age {meta['house_runs_out_age']} "
+            f"(Year {meta['house_runs_out_year']}) before your housing end age {meta['house_end_age']}."
+        )
+
+    
     if meta.get("oa_withdrawal_enabled") and (meta.get("oa_runs_out_age") is not None):
         st.warning(
             f"OA runs out at age {meta['oa_runs_out_age']} "
-            f"(Year {meta['oa_runs_out_year']}) under your withdrawal settings."
+            f"(Year {meta['oa_runs_out_year']}) under your OA withdrawal settings."
         )
-
+    
     # KPI Cards
     end_row = yearly_df.sort_values("Year").iloc[-1]
     c1, c2, c3, c4 = st.columns(4)
@@ -1147,8 +1152,9 @@ if run_btn:
 
     # Yearly stacked balances with FRS line
     st.markdown("### Yearly Balances (Stacked)")
-    yearly_long = yearly_df.melt(id_vars=['Year','Age_end','YearAge'], value_vars=['End_OA','End_SA','End_MA','End_RA'], var_name='Account', value_name='Balance')
+    yearly_long = yearly_df.melt(id_vars=['Year','Age_end'], value_vars=['End_OA','End_SA','End_MA','End_RA'], var_name='Account', value_name='Balance')
     yearly_long['Account'] = yearly_long['Account'].replace({'End_OA':'OA','End_SA':'SA','End_MA':'MA','End_RA':'RA'})
+    yearly_long['YearAge'] = yearly_long.apply(lambda r: f"{int(r['Year'])} (Age {int(r['Age_end'])})", axis=1)
     stacked = alt.Chart(yearly_long).mark_bar().encode(
         x=alt.X('YearAge:O', title='Year (Age)', sort=None),
         y=alt.Y('sum(Balance):Q', title='Balance (S$)'),
@@ -1162,13 +1168,9 @@ if run_btn:
 
     # CPF LIFE payouts & bequest
     if include_cpf_life and cpf_life_df is not None:
-
         st.markdown("### CPF LIFE Payouts")
         start_monthly = meta.get("monthly_start_payout", None)
         if start_monthly is not None:
-            inflation_assumed = 0.02
-            years_until_start = max(0, (dob.year + int(payout_start_age)) - int(start_year))
-            start_monthly_today = start_monthly / ((1 + inflation_assumed) ** years_until_start)
             st.markdown(
                 f"**Plan:** {cpf_life_plan} &nbsp;&nbsp; "
                 f"**Start age:** {payout_start_age} &nbsp;&nbsp; "
@@ -1197,7 +1199,7 @@ if run_btn:
             use_container_width=True, height=260
         )
 
-        # Dual-axis: Bequest + Monthly payout
+        # Bequest + Monthly payout chart
         st.markdown("### Bequest & Monthly Payout Over Time")
         _bequest_plot = bequest_df.copy()
         _bequest_plot["YearAge"] = _bequest_plot["Year"].map(lambda y: _label_year_age(y, yearly_df))
@@ -1245,12 +1247,10 @@ if run_btn:
             ],
         )
 
-        dual_axis_chart = alt.layer(bequest_lines, payout_line) \
-            .resolve_scale(y='independent') \
-            .properties(height=320)
+        dual_axis_chart = alt.layer(bequest_lines, payout_line).resolve_scale(y='independent').properties(height=320)
         st.altair_chart(dual_axis_chart, use_container_width=True)
 
-    # ====== IP + MSHL stacked premiums (policy split, ignores MA sufficiency) ======
+    # Health Insurance Premiums (stacked intended sources)
     if ("MSHL_Nominal" in yearly_df.columns) and (
         yearly_df[["MSHL_Nominal",
                    "IP_Base_MA_Nominal_Annual",
@@ -1303,13 +1303,13 @@ if run_btn:
 
     # Yearly table
     st.markdown("### Yearly Summary Table")
+    yearly_df['Year (Age)'] = yearly_df.apply(lambda r: f"{int(r['Year'])} (Age {int(r['Age_end'])})", axis=1)
     cols = ['Year (Age)', 'Year', 'Age_end', 'End_OA','End_SA','End_MA','End_RA',
             'RA_capital_end','Prevailing_ERS','Total_Base_Interest','Total_Extra_Interest',
             'OW_subject_total','AW_subject_total','CPF_LIFE_Annual_Payout',
             'MSHL_Annual','LTCI_Premium_Annual_MA','IP_Base_MA_Annual','IP_Base_Cash_Annual','IP_Rider_Cash_Annual',
-            # Top-ups (new)
+            'Housing_OA_Annual',
             'Topup_OA_Annual','Topup_SA_Annual','Topup_RA_Annual','Topup_MA_Annual',
-            # OA withdrawal (new)
             'OA_Withdrawal_Annual']
     yearly_display = yearly_df[[c for c in cols if c in yearly_df.columns]].copy()
     st.dataframe(
@@ -1321,6 +1321,7 @@ if run_btn:
             'CPF_LIFE_Annual_Payout':'{:,.0f}',
             'MSHL_Annual':'{:,.0f}', 'LTCI_Premium_Annual_MA':'{:,.0f}',
             'IP_Base_MA_Annual':'{:,.0f}', 'IP_Base_Cash_Annual':'{:,.0f}', 'IP_Rider_Cash_Annual':'{:,.0f}',
+            'Housing_OA_Annual':'{:,.0f}',
             'Topup_OA_Annual':'{:,.0f}', 'Topup_SA_Annual':'{:,.0f}', 'Topup_RA_Annual':'{:,.0f}', 'Topup_MA_Annual':'{:,.0f}',
             'OA_Withdrawal_Annual':'{:,.0f}',
         }),
@@ -1332,14 +1333,7 @@ if run_btn:
     with st.expander("Show monthly breakdown"):
         st.dataframe(monthly_df, use_container_width=True, height=420)
 
-#    # OA runs-out warning  [ADDED]
-#    if meta.get("oa_withdrawal_enabled") and (meta.get("oa_runs_out_age") is not None):
-#        st.warning(
-#            f"OA runs out at age {meta['oa_runs_out_age']} "
-#            f"(Year {meta['oa_runs_out_year']}) under your withdrawal settings."
-#        )
-
-    # Notes (guarded so it never errors when CPF LIFE is off)
+    # Notes
     cohort_bhs = get_bhs_for_year_with_cohort(dob, dob.year + 65, bhs_growth_pct)
     notes_html = [
         f"  Cohort FRS (fixed at age 55): <b>${cohort_frs:,.0f}</b>.",
@@ -1348,12 +1342,9 @@ if run_btn:
     ]
     if include_cpf_life and (cpf_life_df is not None) and meta.get("monthly_start_payout"):
         start_monthly = meta["monthly_start_payout"]
-        inflation_assumed = 0.02
-        years_until_start = max(0, (dob.year + int(payout_start_age)) - int(start_year))
-        start_monthly_today = start_monthly / ((1 + inflation_assumed) ** years_until_start)
         notes_html.append(
-            f"  Starting CPF LIFE monthly payout in today's value @2% inflation: "
-            f"<b>${start_monthly_today:,.0f}</b>"
+            f"  Starting CPF LIFE monthly payout (nominal at start): "
+            f"<b>${start_monthly:,.0f}</b>"
         )
 
     st.markdown("---")
