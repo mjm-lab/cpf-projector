@@ -1171,6 +1171,9 @@ if run_btn:
         st.markdown("### CPF LIFE Payouts")
         start_monthly = meta.get("monthly_start_payout", None)
         if start_monthly is not None:
+            inflation_assumed = 0.02
+            years_until_start = max(0, (dob.year + int(payout_start_age)) - int(start_year))
+            start_monthly_today = start_monthly / ((1 + inflation_assumed) ** years_until_start)
             st.markdown(
                 f"**Plan:** {cpf_life_plan} &nbsp;&nbsp; "
                 f"**Start age:** {payout_start_age} &nbsp;&nbsp; "
@@ -1344,7 +1347,7 @@ if run_btn:
         start_monthly = meta["monthly_start_payout"]
         notes_html.append(
             f"  Starting CPF LIFE monthly payout in today's value @2% inflation: "
-            f"<b>${start_monthly:,.0f}</b>"
+            f"<b>${start_monthly_today:,.0f}</b>"
         )
 
     st.markdown("---")
@@ -1357,5 +1360,6 @@ if run_btn:
 
 else:
     st.info("Set your inputs in the sidebar and click **Run Projection**.")
+
 
 
