@@ -1343,7 +1343,7 @@ if run_btn:
     if include_cpf_life and (cpf_life_df is not None) and meta.get("monthly_start_payout"):
         start_monthly = meta["monthly_start_payout"]
         notes_html.append(
-            f"  Starting CPF LIFE monthly payout (nominal at start): "
+            f"  Starting CPF LIFE monthly payout in today's value @2% inflation: "
             f"<b>${start_monthly:,.0f}</b>"
         )
 
@@ -1357,4 +1357,5 @@ if run_btn:
 
 else:
     st.info("Set your inputs in the sidebar and click **Run Projection**.")
+
 
