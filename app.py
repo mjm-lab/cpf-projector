@@ -410,8 +410,9 @@ def project(
     monthly_rows = []
     year55 = dob.year + 55
     cohort_frs = get_frs_for_cohort(year55, frs_growth_pct)
-    cohort_ers = cohort_frs * ers_factor
-    ra_transfer_target = cohort_ers
+    cohort_ers = cohort_frs * 2
+    desired_ra_opening_multiple = ers_factor
+    ra_transfer_target = cohort_frs*desired_ra_opening_multiple
 
     # Track capital and CPF LIFE
     ra_capital = bal.get("RA", 0.0)
@@ -445,7 +446,7 @@ def project(
         ow_cap = ow_ceiling_monthly(year)
 
         prevailing_frs_year = get_frs_for_year(year, frs_growth_pct)
-        prevailing_ers_year = prevailing_frs_year * ers_factor
+        prevailing_ers_year = prevailing_frs_year * 2
 
         ow_subject_per_mo = min(monthly_income_y, ow_cap)
         ow_used_ytd = 0.0  # for bonus cap
@@ -908,7 +909,7 @@ def project(
 with st.sidebar:
     st.header("Inputs")
     name = st.text_input("Name", value="Member")
-    dob = st.date_input("Date of birth", value=date(1980,1,1), min_value=date(1900,1,1), max_value=date.today(), format="DD-MM-YYYY")
+    dob = st.date_input("Date of birth", value=date(1980,1,1), min_value=date(1960,1,1), max_value=date.today(), format="DD-MM-YYYY")
     gender = st.selectbox("Gender", ["M", "F"], index=1)
 
     start_year = st.number_input("Start year", min_value=2000, max_value=2100, value=date.today().year, step=1)
@@ -1360,6 +1361,3 @@ if run_btn:
 
 else:
     st.info("Set your inputs in the sidebar and click **Run Projection**.")
-
-
-
