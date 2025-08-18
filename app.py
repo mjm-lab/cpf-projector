@@ -99,7 +99,6 @@ BASIC_PREMIUM_FRAC = 0.10          # fraction of RA paid as premium at start for
 # Defaults so project() can be reused
 m_topup_month = 1
 topup_OA = topup_SA_RA = topup_MA = 0.0
-# Removed: yearly MA/OA deduction globals (simplified)
 
 # ==============================
 # Helper functions
@@ -201,22 +200,23 @@ def get_mshl_premium_by_anb(anb: int) -> float:
             return float(prem)
     return 0.0
 
-# -------- Extra interest BEFORE CPF LIFE starts --------
+# -------- Extra interest (single rule; same before/after LIFE accrual) --------
 def compute_extra_interest_distribution(age, oa, sa, ma, ra):
+    """Return ANNUAL extra-interest (not /12) allocation by source account."""
     ei = {"OA": 0.0, "SA": 0.0, "MA": 0.0, "RA": 0.0}
     if age < 55:
         remaining = EXTRA_BELOW_55["pool"]
         take_oa = min(remaining, min(oa, EXTRA_BELOW_55["oa_cap"]))
         if take_oa > 0:
-            ei["OA"] += take_oa * EXTRA_BELOW_55["tier1_rate"]
+            ei["OA"] += take_oa * 0.01
             remaining -= take_oa
         take_sa = min(remaining, sa)
         if take_sa > 0:
-            ei["SA"] += take_sa * EXTRA_BELOW_55["tier1_rate"]
+            ei["SA"] += take_sa * 0.01
             remaining -= take_sa
         take_ma = min(remaining, ma)
         if take_ma > 0:
-            ei["MA"] += take_ma * EXTRA_BELOW_55["tier1_rate"]
+            ei["MA"] += take_ma * 0.01
             remaining -= take_ma
     else:
         t1 = 30000.0; t2 = 30000.0
@@ -234,15 +234,12 @@ def compute_extra_interest_distribution(age, oa, sa, ma, ra):
         ei["RA"] += r2 * 0.01; ei["OA"] += o2 * 0.01; ei["SA"] += s2 * 0.01; ei["MA"] += m2 * 0.01
     return ei
 
-# -------- Extra interest AFTER CPF LIFE starts --------
-def compute_extra_interest_distribution_after_cpf_life(age, oa, sa, ma, ra, premium_remaining):
-    if age < 55:
-        return compute_extra_interest_distribution(age, oa, sa, ma, ra)
-    tier1 = min(ra, 30000.0) * 0.02
-    tier2 = min(max(ra - 30000.0, 0.0), 30000.0) * 0.01
-    return {"OA": 0.0, "SA": 0.0, "MA": 0.0, "RA": tier1 + tier2}
-
-def spill_from_ma(age, ma_end, bhs, sa, oa, ra, frs_for_cohort):
+def spill_from_ma(age, ma_end, bhs, sa, oa, ra, frs_for_cohort, ra_capital):
+    """
+    Enforce BHS with spillovers:
+    <55: MA -> SA (up to cohort FRS), then OA
+    ≥55: MA -> RA (only until RA capital reaches cohort FRS), then OA
+    """
     if ma_end <= bhs:
         return ma_end, sa, oa, ra
     excess = ma_end - bhs
@@ -252,8 +249,8 @@ def spill_from_ma(age, ma_end, bhs, sa, oa, ra, frs_for_cohort):
         to_sa = min(excess, space_sa); sa += to_sa; excess -= to_sa
         oa += excess; excess = 0.0
     else:
-        space_ra = max(0.0, frs_for_cohort - ra)
-        to_ra = min(excess, space_ra); ra += to_ra; excess -= to_ra
+        space_ra_cap = max(0.0, frs_for_cohort - ra_capital)
+        to_ra = min(excess, space_ra_cap); ra += to_ra; excess -= to_ra
         oa += excess; excess = 0.0
     return ma_end, sa, oa, ra
 
@@ -400,7 +397,7 @@ def project(
     withdraw_oa_monthly_amount: float = 0.0,
     withdraw_oa_start_age: int = 55,
     withdraw_oa_end_age: int = 120,
-    # Housing loan (OA monthly) — start is implicit (now); stop by end age
+    # Housing loan (OA monthly)
     house_enabled: bool = False,
     house_monthly_amount: float = 0.0,
     house_end_age: int = 120,
@@ -412,7 +409,7 @@ def project(
     cohort_frs = get_frs_for_cohort(year55, frs_growth_pct)
     cohort_ers = cohort_frs * 2
     desired_ra_opening_multiple = ers_factor
-    ra_transfer_target = cohort_frs*desired_ra_opening_multiple
+    ra_transfer_target = min(cohort_frs * desired_ra_opening_multiple, cohort_ers)
 
     # Track capital and CPF LIFE
     ra_capital = bal.get("RA", 0.0)
@@ -437,6 +434,9 @@ def project(
 
     start_year_sched = None
 
+    # Sweep control (perform once, right after LIFE starts)
+    did_ra_interest_sweep_at_start = False
+
     for year in range(start_year, start_year + years):
         yr_index = year - start_year
         monthly_income_y = monthly_income * ((1 + salary_growth_pct) ** yr_index)
@@ -450,6 +450,23 @@ def project(
 
         ow_subject_per_mo = min(monthly_income_y, ow_cap)
         ow_used_ytd = 0.0  # for bonus cap
+        
+        # ---- Interest accrual buckets (reset each calendar year) ----
+        accr_base_to_OA = 0.0
+        accr_base_to_SA = 0.0
+        accr_base_to_MA = 0.0
+
+        # Split RA-directed credits so we can route correctly post-LIFE
+        accr_base_to_RA_from_RA = 0.0   # base interest earned by RA itself
+        accr_base_to_RA_from_SA = 0.0   # base interest earned by SA (routed to RA ≥55)
+
+        accr_extra_to_SA = 0.0
+        accr_extra_to_MA = 0.0
+
+        # extra interest routed to RA, by source (≥55)
+        accr_extra_to_RA_from_RA = 0.0
+        accr_extra_to_RA_from_OA = 0.0
+        accr_extra_to_RA_from_SA = 0.0
 
         for month in range(1, 13):
             age = age_at(dob, year, month)
@@ -476,7 +493,8 @@ def project(
                 coeff = CPF_LIFE_COEFFS[coeff_key][plan_map[cpf_life_plan]]
                 payout_65 = coeff["a"] + coeff["b"] * ra_at_65_value
                 monthly_start_payout = payout_65 * ((1 + CPF_LIFE_DEFERRAL_PER_YEAR) ** (payout_start_age - 65))
-                # Premium deduction
+
+                # Premium deduction (moves RA to annuity pool; ra_capital stays unchanged)
                 if cpf_life_plan in ("Standard","Escalating"):
                     premium = bal["RA"]
                     premium_pool += premium
@@ -486,8 +504,50 @@ def project(
                     premium_pool += premium
                     bal["RA"] -= premium
                     ra_savings_for_basic = bal["RA"]
+
                 cpf_life_started = True
                 start_year_sched = year
+
+                # --------- RA interest sweep RIGHT AFTER start (Std/Esc only) ---------
+                if cpf_life_plan in ("Standard","Escalating") and not did_ra_interest_sweep_at_start:
+                    # Pending RA-directed interest accrued YTD
+                    ra_due_from_buckets = (
+                        accr_base_to_RA_from_RA
+                        + accr_base_to_RA_from_SA
+                        + accr_extra_to_RA_from_RA
+                        + accr_extra_to_RA_from_OA
+                        + accr_extra_to_RA_from_SA
+                    )
+
+                    # Pending MA interest YTD that would spill to RA if credited now
+                    pending_ma_interest = accr_base_to_MA + accr_extra_to_MA
+                    ma0, sa0, oa0, ra0 = bal["MA"], bal["SA"], bal["OA"], bal["RA"]
+                    ma_sim_end = ma0 + pending_ma_interest
+                    _ma, _sa, _oa, ra_after = spill_from_ma(
+                        age=age,
+                        ma_end=ma_sim_end,
+                        bhs=bhs_this_year,
+                        sa=sa0,
+                        oa=oa0,
+                        ra=ra0,
+                        frs_for_cohort=cohort_frs,
+                        ra_capital=ra_capital
+                    )
+                    ra_due_from_ma_spill = max(0.0, ra_after - ra0)
+
+                    sweep_amount = ra_due_from_buckets + ra_due_from_ma_spill
+                    if sweep_amount > 0:
+                        premium_pool += sweep_amount
+
+                    # Clear RA-directed buckets so they won't later credit to member
+                    accr_base_to_RA_from_RA = 0.0
+                    accr_base_to_RA_from_SA = 0.0
+                    accr_extra_to_RA_from_RA = 0.0
+                    accr_extra_to_RA_from_OA = 0.0
+                    accr_extra_to_RA_from_SA = 0.0
+
+                    did_ra_interest_sweep_at_start = True
+                # ---------------------------------------------------------------------
 
             # --- Monthly OW contributions ---
             working = age < retirement_age
@@ -499,8 +559,8 @@ def project(
                 to_MA = to_SA_RA = to_OA = 0.0
 
             if age >= 55:
-                space_ra = max(0.0, cohort_frs - bal["RA"])
-                to_RA = min(to_SA_RA, space_ra)
+                space_ra_cap = max(0.0, cohort_frs - ra_capital)
+                to_RA = min(to_SA_RA, space_ra_cap)
                 to_OA += (to_SA_RA - to_RA)
                 to_SA = 0.0
             else:
@@ -527,8 +587,8 @@ def project(
                 to_SA_RA_aw = aw_subject * alloc["SA_RA"]
                 to_OA_aw = aw_subject * alloc["OA"]
                 if age >= 55:
-                    space_ra2 = max(0.0, cohort_frs - bal["RA"])
-                    to_RA_aw = min(to_SA_RA_aw, space_ra2)
+                    space_ra2_cap = max(0.0, cohort_frs - ra_capital)
+                    to_RA_aw = min(to_SA_RA_aw, space_ra2_cap)
                     to_OA_aw += (to_SA_RA_aw - to_RA_aw)
                     to_SA_aw = 0.0
                 else:
@@ -670,52 +730,49 @@ def project(
                     house_runs_out_year = int(year)
                     house_runs_out_month = int(month)
 
-            # --- Monthly interest (on previous month-end) ---
+            # --- Monthly interest ACCRUAL (computed on previous month-end balances) ---
             base_int_OA = prev_bal_for_interest.get("OA", 0.0) * (BASE_INT["OA"] / 12.0)
-            base_int_SA = prev_bal_for_interest.get("SA", 0.0) * (BASE_INT["SA"] / 12.0)
+            base_int_SA_raw = prev_bal_for_interest.get("SA", 0.0) * (BASE_INT["SA"] / 12.0)
             base_int_MA = prev_bal_for_interest.get("MA", 0.0) * (BASE_INT["MA"] / 12.0)
+            base_int_RA = prev_bal_for_interest.get("RA", 0.0) * (BASE_INT["RA"] / 12.0)  # always accrue RA interest notionally
 
-            if cpf_life_started and cpf_life_plan in ("Standard", "Escalating"):
-                base_int_RA = 0.0
-            else:
-                base_int_RA = prev_bal_for_interest.get("RA", 0.0) * (BASE_INT["RA"] / 12.0)
-
-            bal["OA"] += base_int_OA
+            # Route base-interest ACCRUAL to buckets (not credited yet)
+            accr_base_to_OA += base_int_OA
             if age < 55:
-                bal["SA"] += base_int_SA
+                accr_base_to_SA += base_int_SA_raw
             else:
-                bal["RA"] += base_int_SA
-            bal["MA"] += base_int_MA
-            bal["RA"] += base_int_RA
+                # After 55, SA base interest is treated as RA-directed
+                accr_base_to_RA_from_SA += base_int_SA_raw
+            accr_base_to_MA += base_int_MA
+            # RA base interest is RA-directed
+            accr_base_to_RA_from_RA += base_int_RA
 
-            if cpf_life_started:
-                ei = compute_extra_interest_distribution_after_cpf_life(
-                    age,
-                    prev_bal_for_interest.get("OA", 0.0),
-                    prev_bal_for_interest.get("SA", 0.0),
-                    prev_bal_for_interest.get("MA", 0.0),
-                    bal["RA"],
-                    premium_remaining=premium_pool
-                )
-            else:
-                ei = compute_extra_interest_distribution(
-                    age,
-                    prev_bal_for_interest.get("OA", 0.0),
-                    prev_bal_for_interest.get("SA", 0.0),
-                    prev_bal_for_interest.get("MA", 0.0),
-                    prev_bal_for_interest.get("RA", 0.0),
-                )
+            # Extra-interest ACCRUAL on prev month-end balances (single rule)
+            ei = compute_extra_interest_distribution(
+                age,
+                prev_bal_for_interest.get("OA", 0.0),
+                prev_bal_for_interest.get("SA", 0.0),
+                prev_bal_for_interest.get("MA", 0.0),
+                prev_bal_for_interest.get("RA", 0.0),
+            )
 
-            # Route extra interest
             if age < 55:
-                bal["SA"] += ei["OA"] / 12.0
-                bal["SA"] += ei["SA"] / 12.0
-                bal["MA"] += ei["MA"] / 12.0
+                # OA+SA extra -> SA; MA extra -> MA
+                accr_extra_to_SA += (ei["OA"] / 12.0) + (ei["SA"] / 12.0)
+                accr_extra_to_MA += (ei["MA"] / 12.0)
+                # (Any RA extra when <55 is zero in allocator)
             else:
-                bal["RA"] += ei["OA"] / 12.0
-                if not cpf_life_started:
-                    bal["MA"] += ei["MA"] / 12.0
-            bal["RA"] += ei["RA"] / 12.0
+                post_life = (include_cpf_life and cpf_life_started)
+                # OA extra: before LIFE -> RA; after LIFE (any plan) -> pool
+                if post_life:
+                    premium_pool += (ei["OA"] / 12.0)
+                else:
+                    accr_extra_to_RA_from_OA += (ei["OA"] / 12.0)
+                # SA & RA extra are RA-directed
+                accr_extra_to_RA_from_SA += (ei["SA"] / 12.0)
+                accr_extra_to_RA_from_RA += (ei["RA"] / 12.0)
+                # MA extra stays with MA
+                accr_extra_to_MA += (ei["MA"] / 12.0)
 
             # --- CPF LIFE payouts (Basic only draws from RA savings) ---
             monthly_cpf_payout = 0.0
@@ -728,32 +785,115 @@ def project(
                 if cpf_life_plan == "Basic":
                     draw = min(bal["RA"], monthly_cpf_payout)
                     bal["RA"] -= draw
+                    # (ra_capital unchanged by draw)
 
             # --- Enforce BHS and spillovers ---
-            if cpf_life_started:
-                if bal["MA"] > bhs_this_year:
-                    excess = bal["MA"] - bhs_this_year
-                    bal["MA"] = bhs_this_year
-                    bal["OA"] += excess
-            else:
-                ra_before = bal["RA"]
-                bal["MA"], bal["SA"], bal["OA"], bal["RA"] = spill_from_ma(
-                    age, bal["MA"], bhs_this_year, bal["SA"], bal["OA"], bal["RA"], cohort_frs
-                )
-                ra_spill = max(0.0, bal["RA"] - ra_before); ra_capital += ra_spill
+            ra_before = bal["RA"]
+            bal["MA"], bal["SA"], bal["OA"], bal["RA"] = spill_from_ma(
+                age, bal["MA"], bhs_this_year, bal["SA"], bal["OA"], bal["RA"], cohort_frs, ra_capital
+            )
+            ra_spill = max(0.0, bal["RA"] - ra_before)
+            ra_capital += ra_spill  # MA->RA spill counts as capital
 
             # Ensure SA closed after 55
             if age >= 55 and bal["SA"] > 0:
                 bal["RA"] += bal["SA"]; bal["SA"] = 0.0
+                # (moving SA->RA here does not add to ra_capital; only transfers/contri/spills do)
 
-            # --- Save monthly row ---
+#            # --- Save monthly row ---
+#            monthly_rows.append({
+#                "Year": year, "Month": month, "Age": age,
+#                "BHS": bhs_this_year, "FRS_cohort": cohort_frs, "ERS_cohort": cohort_ers,
+#                "RA_target55_multiple": ers_factor, "OW_cap": ow_cap,
+#                "Income_used": income_used_this_month, "Bonus_used_dec": aw_used_this_dec,
+#                "OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"],
+#                "BaseInt_OA": base_int_OA, "BaseInt_SA": base_int_SA_raw, "BaseInt_MA": base_int_MA, "BaseInt_RA": base_int_RA,
+#                "ExtraInt_OA": ei["OA"]/12.0, "ExtraInt_SA": ei["SA"]/12.0, "ExtraInt_MA": ei["MA"]/12.0, "ExtraInt_RA": ei["RA"]/12.0,
+#                "RA_capital": ra_capital, "Prevailing_ERS": prevailing_ers_year,
+#                "CPF_LIFE_started": int(cpf_life_started), "CPF_LIFE_monthly_payout": monthly_cpf_payout,
+#
+#                # Insurance flows
+#                "MSHL_Premium_Paid": mshl_paid_this_month,
+#                "MSHL_Premium_Nominal": mshl_nominal_this_month,
+#                "LTCI_MA_Premium_Paid": ltci_paid_this_month,
+#
+#                "IP_Base_MA_Paid": ip_base_ma_paid,
+#                "IP_Base_Cash": ip_base_cash,
+#                "IP_Rider_Cash": ip_rider_cash,
+#
+#                # Nominal (for stacked chart by intended source)
+#                "IP_Base_MA_Nominal": ip_base_ma_nominal,
+#                "IP_Base_Cash_Nominal": ip_base_cash_nominal,
+#                "IP_Rider_Cash_Nominal": ip_rider_cash_nominal,
+#
+#                # Top-ups actually applied this month
+#                "Topup_OA_Applied": topup_oa_applied,
+#                "Topup_SA_Applied": topup_sa_applied,
+#                "Topup_RA_Applied": topup_ra_applied,
+#                "Topup_MA_Applied": topup_ma_applied,
+#
+#                # Withdrawals / Housing
+#                "OA_Withdrawal_Paid": oa_withdrawal_paid,
+#                "Housing_OA_Paid": house_paid_this_month,
+#            })
+
+            # --- Save monthly row OR (in December) save it AFTER year-end interest credit ---
+
+            # We will credit interest on 31 Dec so Dec ending balances include the year's interest.
+            is_december = (month == 12)
+
+            if is_december:
+                # ---- CREDIT all accrued interest ON 31 DEC (so Dec ending balances include interest) ----
+                # 1) Credit interest for THIS calendar year into member/pool as per rules
+                bal["OA"] += accr_base_to_OA
+                bal["SA"] += accr_base_to_SA + accr_extra_to_SA
+                bal["MA"] += accr_base_to_MA + accr_extra_to_MA
+
+                ra_dir_interest = (
+                    accr_base_to_RA_from_RA
+                    + accr_base_to_RA_from_SA
+                    + accr_extra_to_RA_from_RA
+                    + accr_extra_to_RA_from_SA
+                    + accr_extra_to_RA_from_OA
+                )
+
+                post_life_std_esc = (
+                    include_cpf_life and cpf_life_started and (cpf_life_plan in ("Standard", "Escalating"))
+                )
+                if post_life_std_esc:
+                    # After LIFE (Std/Esc): ALL RA-directed interest goes to pool (not to member's RA)
+                    premium_pool += ra_dir_interest
+                else:
+                    # Before LIFE or Basic plan: credit to RA
+                    bal["RA"] += ra_dir_interest
+
+                # 2) Apply spillovers USING THIS YEAR'S LIMITS (credit belongs to this year)
+                ra_before_dec = bal["RA"]
+                bal["MA"], bal["SA"], bal["OA"], bal["RA"] = spill_from_ma(
+                    age, bal["MA"], bhs_this_year, bal["SA"], bal["OA"], bal["RA"], cohort_frs, ra_capital
+                )
+                ra_spill_dec = max(0.0, bal["RA"] - ra_before_dec)
+                ra_capital += ra_spill_dec  # MA->RA spill counts as capital
+
+                # Ensure SA is closed after 55 (in case credit landed anything in SA)
+                if age >= 55 and bal["SA"] > 0:
+                    bal["RA"] += bal["SA"]; bal["SA"] = 0.0
+                    # (SA->RA here is not capital)
+
+                # 3) Reset accrual buckets for the new year
+                accr_base_to_OA = accr_base_to_SA = accr_base_to_MA = 0.0
+                accr_base_to_RA_from_RA = accr_base_to_RA_from_SA = 0.0
+                accr_extra_to_SA = accr_extra_to_MA = 0.0
+                accr_extra_to_RA_from_RA = accr_extra_to_RA_from_OA = accr_extra_to_RA_from_SA = 0.0
+
+            # Now record the month (Dec row will already include the credited interest)
             monthly_rows.append({
                 "Year": year, "Month": month, "Age": age,
                 "BHS": bhs_this_year, "FRS_cohort": cohort_frs, "ERS_cohort": cohort_ers,
                 "RA_target55_multiple": ers_factor, "OW_cap": ow_cap,
                 "Income_used": income_used_this_month, "Bonus_used_dec": aw_used_this_dec,
                 "OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"],
-                "BaseInt_OA": base_int_OA, "BaseInt_SA": base_int_SA, "BaseInt_MA": base_int_MA, "BaseInt_RA": base_int_RA,
+                "BaseInt_OA": base_int_OA, "BaseInt_SA": base_int_SA_raw, "BaseInt_MA": base_int_MA, "BaseInt_RA": base_int_RA,
                 "ExtraInt_OA": ei["OA"]/12.0, "ExtraInt_SA": ei["SA"]/12.0, "ExtraInt_MA": ei["MA"]/12.0, "ExtraInt_RA": ei["RA"]/12.0,
                 "RA_capital": ra_capital, "Prevailing_ERS": prevailing_ers_year,
                 "CPF_LIFE_started": int(cpf_life_started), "CPF_LIFE_monthly_payout": monthly_cpf_payout,
@@ -761,13 +901,16 @@ def project(
                 # Insurance flows
                 "MSHL_Premium_Paid": mshl_paid_this_month,
                 "MSHL_Premium_Nominal": mshl_nominal_this_month,
+
+                # LTC from MA (deducted from MA but NOT plotted in the health insurance chart)
                 "LTCI_MA_Premium_Paid": ltci_paid_this_month,
 
+                # IP flows
                 "IP_Base_MA_Paid": ip_base_ma_paid,
                 "IP_Base_Cash": ip_base_cash,
                 "IP_Rider_Cash": ip_rider_cash,
 
-                # Nominal (for stacked chart by intended source)
+                # Nominal (for stacked chart by intended source — LTC intentionally excluded)
                 "IP_Base_MA_Nominal": ip_base_ma_nominal,
                 "IP_Base_Cash_Nominal": ip_base_cash_nominal,
                 "IP_Rider_Cash_Nominal": ip_rider_cash_nominal,
@@ -783,7 +926,59 @@ def project(
                 "Housing_OA_Paid": house_paid_this_month,
             })
 
-            prev_bal_for_interest = {"OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"]}
+            # Set next month's accrual base to month-end balances
+            # (post-credit balances for December)
+            prev_bal_for_interest = {
+                "OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"]
+            }
+
+
+            
+            # ---- CREDIT all accrued interest after December (i.e., on 1 Jan next year) ----
+            if month == 12:
+                # 1) Credit interest for THIS calendar year
+                bal["OA"] += accr_base_to_OA
+                bal["SA"] += accr_base_to_SA + accr_extra_to_SA
+                bal["MA"] += accr_base_to_MA + accr_extra_to_MA
+
+                # Sum RA-directed interest
+                ra_dir_interest = (
+                    accr_base_to_RA_from_RA
+                    + accr_base_to_RA_from_SA
+                    + accr_extra_to_RA_from_RA
+                    + accr_extra_to_RA_from_SA
+                    + accr_extra_to_RA_from_OA
+                )
+
+                post_life_std_esc = (include_cpf_life and cpf_life_started and (cpf_life_plan in ("Standard","Escalating")))
+                if post_life_std_esc:
+                    # After LIFE (Std/Esc): ALL RA-directed interest goes to pool (not to member's RA)
+                    premium_pool += ra_dir_interest
+                else:
+                    # Before LIFE or Basic plan: credit to RA
+                    bal["RA"] += ra_dir_interest
+
+                # 2) After-credit spillovers using THIS YEAR's limits (interest belongs to this year)
+                ra_before_dec = bal["RA"]
+                bal["MA"], bal["SA"], bal["OA"], bal["RA"] = spill_from_ma(
+                    age, bal["MA"], bhs_this_year, bal["SA"], bal["OA"], bal["RA"], cohort_frs, ra_capital
+                )
+                ra_spill_dec = max(0.0, bal["RA"] - ra_before_dec)
+                ra_capital += ra_spill_dec  # MA->RA spill counts as capital
+
+                # Ensure SA is closed after 55 (in case credit put anything into SA)
+                if age >= 55 and bal["SA"] > 0:
+                    bal["RA"] += bal["SA"]; bal["SA"] = 0.0
+                    # (Not counted as capital)
+
+                # 3) Reset buckets for the new calendar year
+                accr_base_to_OA = accr_base_to_SA = accr_base_to_MA = 0.0
+                accr_base_to_RA_from_RA = accr_base_to_RA_from_SA = 0.0
+                accr_extra_to_SA = accr_extra_to_MA = 0.0
+                accr_extra_to_RA_from_RA = accr_extra_to_RA_from_OA = accr_extra_to_RA_from_SA = 0.0
+
+                # 4) Set prev_bal_for_interest AFTER credit so January accrual uses post-credit balances
+                prev_bal_for_interest = {"OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"]}
 
     monthly_df = pd.DataFrame(monthly_rows)
 
@@ -864,12 +1059,14 @@ def project(
             sched.append({"Year": y, "Monthly_Payout": monthly, "Annual_Payout": annual})
 
             if cpf_life_plan == "Basic":
+                # Basic: RA savings keep earning to member
                 beq_ra_savings += _annual_ra_interest(beq_ra_savings)
                 draw_from_ra = min(beq_ra_savings, annual)
                 beq_ra_savings -= draw_from_ra
                 from_pool = max(0.0, annual - draw_from_ra)
                 beq_premium = max(0.0, beq_premium - from_pool)
             else:
+                # Std/Esc: payouts entirely from pooled premium (no interest added)
                 beq_premium = max(0.0, beq_premium - annual)
 
             beq_rows.append({
@@ -1120,10 +1317,8 @@ if run_btn:
         )
     
     if ribbons:
-        # NEW — space-separated, wrapped in a div
         html_ribbons = " ".join([f"<span class='pill'>{r}</span>" for r in ribbons])
         st.markdown(f"<div class='ribbon-row'>{html_ribbons}</div>", unsafe_allow_html=True)
-
 
     # Warnings
     if meta.get("house_enabled") and (meta.get("house_runs_out_age") is not None) and (meta["house_runs_out_age"] < meta["house_end_age"]):
@@ -1132,7 +1327,6 @@ if run_btn:
             f"(Year {meta['house_runs_out_year']}) before your housing end age {meta['house_end_age']}."
         )
 
-    
     if meta.get("oa_withdrawal_enabled") and (meta.get("oa_runs_out_age") is not None):
         st.warning(
             f"OA runs out at age {meta['oa_runs_out_age']} "
@@ -1172,9 +1366,6 @@ if run_btn:
         st.markdown("### CPF LIFE Payouts")
         start_monthly = meta.get("monthly_start_payout", None)
         if start_monthly is not None:
-            inflation_assumed = 0.02
-            years_until_start = max(0, (dob.year + int(payout_start_age)) - int(start_year))
-            start_monthly_today = start_monthly / ((1 + inflation_assumed) ** years_until_start)
             st.markdown(
                 f"**Plan:** {cpf_life_plan} &nbsp;&nbsp; "
                 f"**Start age:** {payout_start_age} &nbsp;&nbsp; "
@@ -1338,19 +1529,40 @@ if run_btn:
         st.dataframe(monthly_df, use_container_width=True, height=420)
 
     # Notes
+    notes_html = []
     cohort_bhs = get_bhs_for_year_with_cohort(dob, dob.year + 65, bhs_growth_pct)
-    notes_html = [
-        f"  Cohort FRS (fixed at age 55): <b>${cohort_frs:,.0f}</b>.",
-        f"  Desired RA opening balance at 55 years old (&times;{ers_factor:.2f}): <b>${cohort_frs*ers_factor:,.0f}</b>.",
-        f"  Cohort BHS (fixed at age 65): <b>${cohort_bhs:,.0f}</b>."
-    ]
+    notes_html.append(f"  Cohort FRS (fixed at age 55): <b>${cohort_frs:,.0f}</b>.")
+    notes_html.append(f"  Desired RA opening balance at 55 years old (&times;{ers_factor:.2f}): <b>${cohort_frs*ers_factor:,.0f}</b>.")
+    notes_html.append(f"  Cohort BHS (fixed at age 65): <b>${cohort_bhs:,.0f}</b>.")
+
+    # Note when RA capital first reaches cohort FRS
+    tol = 1e-6
+    hit = (
+        monthly_df.loc[monthly_df["RA_capital"] >= (cohort_frs - tol)]
+                  .sort_values(["Year", "Month"], ascending=[True, True])
+    )
+    if not hit.empty:
+        first = hit.iloc[0]
+        notes_html.append(
+            f"  Your RA savings (capital) first reached your cohort FRS in "
+            f"<b>{int(first['Year'])}-{int(first['Month']):02d} (Age {int(first['Age'])})</b>."
+        )
+
+    if meta.get("monthly_start_payout"):
+        start_monthly = meta["monthly_start_payout"]
+        notes_html.append(
+            f"  CPF LIFE monthly payout at start (nominal): <b>${start_monthly:,.0f}</b>."
+        )
+
     if include_cpf_life and (cpf_life_df is not None) and meta.get("monthly_start_payout"):
         start_monthly = meta["monthly_start_payout"]
+        inflation_assumed = 0.02
+        years_until_start = max(0, (dob.year + int(payout_start_age)) - int(start_year))
+        start_monthly_today = start_monthly / ((1 + inflation_assumed) ** years_until_start)
         notes_html.append(
             f"  Starting CPF LIFE monthly payout in today's value @2% inflation: "
             f"<b>${start_monthly_today:,.0f}</b>"
         )
-
     st.markdown("---")
     st.markdown(
         "<div style='font-size:16px; line-height:1.6; color:#111;'>" +
