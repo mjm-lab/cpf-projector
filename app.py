@@ -153,7 +153,7 @@ def get_frs_for_cohort(year55: int, frs_growth_pct: float):
     frs = FRS_KNOWN[last_year]
     for _ in range(last_year+1, year55+1):
         frs *= (1 + frs_growth_pct)
-    return round(frs, 2)
+    return round(frs, 0)
 
 def get_frs_for_year(year: int, frs_growth_pct: float) -> float:
     if year in FRS_KNOWN:
@@ -162,7 +162,7 @@ def get_frs_for_year(year: int, frs_growth_pct: float) -> float:
     frs = FRS_KNOWN[last_year]
     for _ in range(last_year + 1, year + 1):
         frs *= (1 + frs_growth_pct)
-    return round(frs, 2)
+    return round(frs, 0)
 
 def get_bhs_for_year_with_cohort(dob: date, year: int, bhs_growth_pct: float):
     """Before 65: prevailing national BHS.
@@ -175,7 +175,7 @@ def get_bhs_for_year_with_cohort(dob: date, year: int, bhs_growth_pct: float):
         bhs = BHS_KNOWN[2025]
         for _ in range(2026, year + 1):
             bhs *= (1 + bhs_growth_pct)
-        return round(bhs, 2)
+        return round(bhs, 0)
     else:
         if year65 in BHS_KNOWN:
             cohort_bhs = BHS_KNOWN[year65]
@@ -202,7 +202,7 @@ def get_bhs_for_year_with_cohort(dob: date, year: int, bhs_growth_pct: float):
                 cohort_bhs = COHORT_BHS_BY_YEAR65[2017]
             else:
                 cohort_bhs = COHORT_BHS_BY_YEAR65[2016]
-        return round(cohort_bhs, 2)
+        return round(cohort_bhs, 0)
 
 # ---- MediShield Life premium (GST inc.) by ANB ----
 def get_mshl_premium_by_anb(anb: int) -> float:
@@ -1275,6 +1275,7 @@ if run_btn:
         house_end_age=int(house_end_age),
     )
 
+    
     # Banner ribbons
     ribbons = []
     if meta.get("house_enabled"):
@@ -1323,12 +1324,26 @@ if run_btn:
     yearly_long = yearly_df.melt(id_vars=['Year','Age_end'], value_vars=['End_OA','End_SA','End_MA','End_RA'], var_name='Account', value_name='Balance')
     yearly_long['Account'] = yearly_long['Account'].replace({'End_OA':'OA','End_SA':'SA','End_MA':'MA','End_RA':'RA'})
     yearly_long['YearAge'] = yearly_long.apply(lambda r: f"{int(r['Year'])} (Age {int(r['Age_end'])})", axis=1)
+#    stacked = alt.Chart(yearly_long).mark_bar().encode(
+#        x=alt.X('YearAge:O', title='Year (Age)', sort=None),
+#        y=alt.Y('sum(Balance):Q', title='Balance (S$)'),
+#        color=alt.Color('Account:N', legend=alt.Legend(title='Account')),
+#        tooltip=['Year','Age_end','Account','Balance']
+#    ).properties(height=360)
+    
     stacked = alt.Chart(yearly_long).mark_bar().encode(
         x=alt.X('YearAge:O', title='Year (Age)', sort=None),
-        y=alt.Y('sum(Balance):Q', title='Balance (S$)'),
+        y=alt.Y('sum(Balance):Q', title='Balance (S$)', axis=alt.Axis(format=',.0f')),  # y-axis no decimals
         color=alt.Color('Account:N', legend=alt.Legend(title='Account')),
-        tooltip=['Year','Age_end','Account','Balance']
+        tooltip=[
+            alt.Tooltip('Year:O', title='Year'),
+            alt.Tooltip('Age_end:Q', title='Age_end'),
+            alt.Tooltip('Account:N', title='Account'),
+            alt.Tooltip('Balance:Q', title='Balance', format=',.0f')  # tooltip no decimals
+        ]
     ).properties(height=360)
+
+
     frs_rule = alt.Chart(pd.DataFrame({'y': [cohort_frs]})).mark_rule(strokeDash=[6,3]).encode(
         y='y:Q', tooltip=[alt.Tooltip('y:Q', title='Cohort FRS')]
     )
