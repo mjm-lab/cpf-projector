@@ -934,51 +934,7 @@ def project(
 
 
             
-            # ---- CREDIT all accrued interest after December (i.e., on 1 Jan next year) ----
-            if month == 12:
-                # 1) Credit interest for THIS calendar year
-                bal["OA"] += accr_base_to_OA
-                bal["SA"] += accr_base_to_SA + accr_extra_to_SA
-                bal["MA"] += accr_base_to_MA + accr_extra_to_MA
-
-                # Sum RA-directed interest
-                ra_dir_interest = (
-                    accr_base_to_RA_from_RA
-                    + accr_base_to_RA_from_SA
-                    + accr_extra_to_RA_from_RA
-                    + accr_extra_to_RA_from_SA
-                    + accr_extra_to_RA_from_OA
-                )
-
-                post_life_std_esc = (include_cpf_life and cpf_life_started and (cpf_life_plan in ("Standard","Escalating")))
-                if post_life_std_esc:
-                    # After LIFE (Std/Esc): ALL RA-directed interest goes to pool (not to member's RA)
-                    premium_pool += ra_dir_interest
-                else:
-                    # Before LIFE or Basic plan: credit to RA
-                    bal["RA"] += ra_dir_interest
-
-                # 2) After-credit spillovers using THIS YEAR's limits (interest belongs to this year)
-                ra_before_dec = bal["RA"]
-                bal["MA"], bal["SA"], bal["OA"], bal["RA"] = spill_from_ma(
-                    age, bal["MA"], bhs_this_year, bal["SA"], bal["OA"], bal["RA"], cohort_frs, ra_capital
-                )
-                ra_spill_dec = max(0.0, bal["RA"] - ra_before_dec)
-                ra_capital += ra_spill_dec  # MA->RA spill counts as capital
-
-                # Ensure SA is closed after 55 (in case credit put anything into SA)
-                if age >= 55 and bal["SA"] > 0:
-                    bal["RA"] += bal["SA"]; bal["SA"] = 0.0
-                    # (Not counted as capital)
-
-                # 3) Reset buckets for the new calendar year
-                accr_base_to_OA = accr_base_to_SA = accr_base_to_MA = 0.0
-                accr_base_to_RA_from_RA = accr_base_to_RA_from_SA = 0.0
-                accr_extra_to_SA = accr_extra_to_MA = 0.0
-                accr_extra_to_RA_from_RA = accr_extra_to_RA_from_OA = accr_extra_to_RA_from_SA = 0.0
-
-                # 4) Set prev_bal_for_interest AFTER credit so January accrual uses post-credit balances
-                prev_bal_for_interest = {"OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"]}
+           
 
     monthly_df = pd.DataFrame(monthly_rows)
 
