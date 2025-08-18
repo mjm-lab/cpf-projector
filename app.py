@@ -53,6 +53,8 @@ EXTRA_55_PLUS = {
     "oa_cap": 20000.0
 }
 
+start_year = 2025
+
 def ow_ceiling_monthly(year: int):
     if year <= 2024:
         return 6800.0
@@ -63,7 +65,22 @@ def ow_ceiling_monthly(year: int):
 
 ANNUAL_TW_CEILING = 102000.0
 
-FRS_KNOWN = {2025: 213000.0, 2026: 220400.0, 2027: 228200.0}
+
+# Full Retirement Sum by cohort year (age 55 in <year>)
+FRS_KNOWN = {
+    1996:  40000.0, 1997:  45000.0, 1998:  50000.0,
+    1999:  55000.0, 2000:  60000.0, 2001:  65000.0,
+    2002:  70000.0, 2003:  75000.0, 2004:  80000.0,
+    2005:  84500.0, 2006:  90000.0, 2007:  94600.0,
+    2008:  99600.0, 2009: 106000.0, 2010: 117000.0,
+    2011: 123000.0, 2012: 131000.0, 2013: 139000.0,
+    2014: 148000.0, 2015: 155000.0, 2016: 161000.0,
+    2017: 166000.0, 2018: 171000.0, 2019: 176000.0,
+    2020: 181000.0, 2021: 186000.0, 2022: 192000.0,
+    2023: 198800.0, 2024: 205800.0, 2025: 213000.0,
+    2026: 220400.0, 2027: 228200.0,
+}
+
 FRS_growth_pct_default = 0.035
 
 BHS_KNOWN = {2025: 75500.0}
@@ -1065,7 +1082,7 @@ with st.sidebar:
     dob = st.date_input("Date of birth", value=date(1980,1,1), min_value=date(1960,1,1), max_value=date.today(), format="DD-MM-YYYY")
     gender = st.selectbox("Gender", ["M", "F"], index=1)
 
-    start_year = st.number_input("Start year", min_value=2000, max_value=2100, value=date.today().year, step=1)
+#    start_year = st.number_input("Start year", min_value=2000, max_value=2100, value=date.today().year, step=1)
     years = st.slider("Years to project", min_value=5, max_value=100, value=60, step=1)
 
     monthly_income = st.number_input("Monthly income (gross)", min_value=0.0, value=6000.0, step=100.0, format="%.2f")
