@@ -1,7 +1,5 @@
-import math
 from datetime import date, datetime
 import pandas as pd
-import numpy as np
 import streamlit as st
 import altair as alt
 
@@ -81,10 +79,10 @@ FRS_KNOWN = {
     2026: 220400.0, 2027: 228200.0,
 }
 
-FRS_growth_pct_default = 0.035
+FRS_growth_pct_default = 3.5
 
 BHS_KNOWN = {2025: 75500.0}
-BHS_growth_pct_default = 0.05
+BHS_growth_pct_default = 5.0
 
 # ---- Cohort BHS (fixed at 65) ----
 COHORT_BHS_BY_YEAR65 = {
@@ -817,42 +815,6 @@ def project(
                 bal["RA"] += bal["SA"]; bal["SA"] = 0.0
                 # (moving SA->RA here does not add to ra_capital; only transfers/contri/spills do)
 
-#            # --- Save monthly row ---
-#            monthly_rows.append({
-#                "Year": year, "Month": month, "Age": age,
-#                "BHS": bhs_this_year, "FRS_cohort": cohort_frs, "ERS_cohort": cohort_ers,
-#                "RA_target55_multiple": ers_factor, "OW_cap": ow_cap,
-#                "Income_used": income_used_this_month, "Bonus_used_dec": aw_used_this_dec,
-#                "OA": bal["OA"], "SA": bal["SA"], "MA": bal["MA"], "RA": bal["RA"],
-#                "BaseInt_OA": base_int_OA, "BaseInt_SA": base_int_SA_raw, "BaseInt_MA": base_int_MA, "BaseInt_RA": base_int_RA,
-#                "ExtraInt_OA": ei["OA"]/12.0, "ExtraInt_SA": ei["SA"]/12.0, "ExtraInt_MA": ei["MA"]/12.0, "ExtraInt_RA": ei["RA"]/12.0,
-#                "RA_capital": ra_capital, "Prevailing_ERS": prevailing_ers_year,
-#                "CPF_LIFE_started": int(cpf_life_started), "CPF_LIFE_monthly_payout": monthly_cpf_payout,
-#
-#                # Insurance flows
-#                "MSHL_Premium_Paid": mshl_paid_this_month,
-#                "MSHL_Premium_Nominal": mshl_nominal_this_month,
-#                "LTCI_MA_Premium_Paid": ltci_paid_this_month,
-#
-#                "IP_Base_MA_Paid": ip_base_ma_paid,
-#                "IP_Base_Cash": ip_base_cash,
-#                "IP_Rider_Cash": ip_rider_cash,
-#
-#                # Nominal (for stacked chart by intended source)
-#                "IP_Base_MA_Nominal": ip_base_ma_nominal,
-#                "IP_Base_Cash_Nominal": ip_base_cash_nominal,
-#                "IP_Rider_Cash_Nominal": ip_rider_cash_nominal,
-#
-#                # Top-ups actually applied this month
-#                "Topup_OA_Applied": topup_oa_applied,
-#                "Topup_SA_Applied": topup_sa_applied,
-#                "Topup_RA_Applied": topup_ra_applied,
-#                "Topup_MA_Applied": topup_ma_applied,
-#
-#                # Withdrawals / Housing
-#                "OA_Withdrawal_Paid": oa_withdrawal_paid,
-#                "Housing_OA_Paid": house_paid_this_month,
-#            })
 
             # --- Save monthly row OR (in December) save it AFTER year-end interest credit ---
 
@@ -1072,6 +1034,30 @@ def project(
     }
     return monthly_df, yearly_df, cohort_frs, cohort_ers, meta, cpf_life_df, bequest_df
 
+# ==== Helpers for milestones, PV, and planning ====
+def find_first_hit(df: pd.DataFrame, col: str, target_series_or_value) -> tuple | None:
+    """
+    If target_series_or_value is a scalar -> compare df[col] >= scalar.
+    If it's a Series in df (e.g., 'BHS') -> compare row-wise: df[col] >= df[target].
+    Returns (year, month, age) or None.
+    """
+    tol = 1e-6
+    if isinstance(target_series_or_value, (int, float)):
+        mask = df[col] >= (float(target_series_or_value) - tol)
+    else:
+        # assume column name
+        tcol = str(target_series_or_value)
+        mask = df[col] >= (df[tcol] - tol)
+    hit = df[mask].sort_values(["Year", "Month"]).head(1)
+    if hit.empty:
+        return None
+    r = hit.iloc[0]
+    return int(r["Year"]), int(r["Month"]), int(r["Age"])
+
+def years_months_from_start(start_year: int, y: int, m: int) -> int:
+    """Months from projection start to (y,m). Month is 1-based."""
+    return (y - start_year) * 12 + (m - 1)
+
 
 # ==============================
 # Sidebar Inputs
@@ -1083,12 +1069,12 @@ with st.sidebar:
     gender = st.selectbox("Gender", ["M", "F"], index=1)
 
 #    start_year = st.number_input("Start year", min_value=2000, max_value=2100, value=date.today().year, step=1)
-    years = st.slider("Years to project", min_value=5, max_value=100, value=60, step=1)
+    years = st.slider("Number of years to project from current year", min_value=5, max_value=100, value=60, step=1)
 
     monthly_income = st.number_input("Monthly income (gross)", min_value=0.0, value=6000.0, step=100.0, format="%.2f")
     annual_bonus = st.number_input("Annual bonus (gross)", min_value=0.0, value=6000.0, step=500.0, format="%.2f")
-    salary_growth_pct = st.number_input("Salary growth % p.a.", min_value=0.0, max_value=0.20, value=0.03, step=0.01, format="%.2f")
-    bonus_growth_pct = st.number_input("Bonus growth % p.a.", min_value=0.0, max_value=0.20, value=0.03, step=0.01, format="%.2f")
+    salary_growth_pct = st.number_input("Salary growth % p.a.", min_value=0.0, max_value=20.0, value=3.0, step=1.0, format="%.1f")/100
+    bonus_growth_pct = st.number_input("Bonus growth % p.a.", min_value=0.0, max_value=20.0, value=3.0, step=1.0, format="%.1f")/100
     retirement_age = st.number_input("Retirement age (stop working contributions)", min_value=40, max_value=80, value=60, step=1, help="From this birthday onward, monthly salary and bonus contributions stop.")
 
     st.subheader("Opening balances")
@@ -1101,8 +1087,8 @@ with st.sidebar:
         opening_RA = st.number_input("RA", min_value=0.0, value=0.0, step=100.0, format="%.2f")
 
     with st.expander("Advanced assumptions", expanded=False):
-        frs_growth_pct = st.number_input("FRS growth after last known year (default 3.5%)", min_value=0.0, max_value=0.10, value=FRS_growth_pct_default, step=0.005, format="%.3f")
-        bhs_growth_pct = st.number_input("BHS growth after 2025 (default 5%)", min_value=0.0, max_value=0.10, value=BHS_growth_pct_default, step=0.005, format="%.3f")
+        frs_growth_pct = st.number_input("FRS growth after last known year (default 3.5%)", min_value=0.0, max_value=10.0, value=FRS_growth_pct_default, step=0.5, format="%.1f")/100
+        bhs_growth_pct = st.number_input("BHS growth after 2025 (default 5%)", min_value=0.0, max_value=10.0, value=BHS_growth_pct_default, step=0.5, format="%.1f")/100
         st.caption("You can adjust FRS/BHS growth to reflect future policy changes.")
         ers_factor = st.number_input("Desired RA opening amount (×FRS)", min_value=1.0, max_value=2.0, value=1.0, step=0.05, help="Target RA amount at age 55 as a multiple of FRS (1× to 2×).")
         st.caption("Choose your desired RA opening target between 1× and 2× FRS.")
@@ -1219,6 +1205,7 @@ with st.expander("CPF LIFE (payouts)", expanded=False):
     cpf_life_plan = st.selectbox("Plan", ["Standard","Escalating","Basic"], index=0)
     payout_start_age = st.number_input("Payout start age (65–70)", min_value=65, max_value=70, value=65, step=1)
 
+    
 run_btn = st.button("Run Projection", type="primary", use_container_width=True)
 
 # ==============================
@@ -1275,7 +1262,74 @@ if run_btn:
         house_end_age=int(house_end_age),
     )
 
-    
+    # ---------- (1) Milestones + (2) Time-to-target ----------
+    # SA reaches cohort FRS (scalar)
+    sa_hit = find_first_hit(monthly_df, "SA", cohort_frs)
+
+
+    chips = []
+    months_to_sa = None
+
+    if sa_hit:
+        y, m, a = sa_hit
+        chips.append(f"SA reached cohort FRS: <b>{y}-{m:02d}</b> (Age {a})")
+        months_to_sa = years_months_from_start(start_year, y, m)
+
+    if chips:
+        st.markdown(
+            "<div class='ribbon-row'>" + " ".join([f"<span class='pill'>{c}</span>" for c in chips]) + "</div>",
+            unsafe_allow_html=True
+        )
+
+    col_tt1 = st.columns(1)[0]
+    with col_tt1:
+        if months_to_sa is None:
+            st.metric("Time to SA = FRS", "Not within horizon")
+        else:
+            st.metric("Time to SA = FRS", f"{months_to_sa} months", delta=("Achieved" if months_to_sa == 0 else None))
+
+
+    # ---------- (11) Policy-limit warnings ----------
+    warns = []
+
+    # Helper: unique int years as CSV string
+    def _years_csv(series):
+        yrs = sorted(set(int(y) for y in series.astype(int).tolist()))
+        return ", ".join(str(y) for y in yrs)
+
+    # A) SA top-up blocked (attempted before 55 but SA already ≥ cohort FRS at the top-up month)
+    if float(topup_SA_RA) > 0:
+        is_topup_month = monthly_df["Month"] == int(m_topup_month)
+        pre55 = monthly_df["Age"] < 55
+        sa_roomless = (monthly_df["SA"] >= (monthly_df["FRS_cohort"] - 1e-6))
+        sa_topup_attempts = monthly_df[is_topup_month & pre55]
+
+        if not sa_topup_attempts.empty:
+            sa_blocked = sa_topup_attempts[
+                (sa_topup_attempts["Topup_SA_Applied"] <= 1e-6) & sa_roomless
+            ]
+            if not sa_blocked.empty:
+                yrs = _years_csv(sa_blocked["Year"])
+                warns.append(f"SA top-up blocked in: {yrs} (SA ≥ cohort FRS at your top-up month).")
+
+    # B) RA top-up blocked (attempted after 55 but RA capital already ≥ Prevailing ERS at the top-up month)
+    if float(topup_SA_RA) > 0:
+        is_topup_month = monthly_df["Month"] == int(m_topup_month)
+        post55 = monthly_df["Age"] >= 55
+        ra_roomless = (monthly_df["RA_capital"] >= (monthly_df["Prevailing_ERS"] - 1e-6))
+        ra_topup_attempts = monthly_df[is_topup_month & post55]
+
+        if not ra_topup_attempts.empty:
+            ra_blocked = ra_topup_attempts[
+                (ra_topup_attempts["Topup_RA_Applied"] <= 1e-6) & ra_roomless
+            ]
+            if not ra_blocked.empty:
+                yrs = _years_csv(ra_blocked["Year"])
+                warns.append(f"RA top-up blocked in: {yrs} (RA capital ≥ Prevailing ERS at your top-up month).")
+
+    for w in warns:
+        st.warning(w)
+
     # Banner ribbons
     ribbons = []
     if meta.get("house_enabled"):
@@ -1294,6 +1348,8 @@ if run_btn:
         html_ribbons = " ".join([f"<span class='pill'>{r}</span>" for r in ribbons])
         st.markdown(f"<div class='ribbon-row'>{html_ribbons}</div>", unsafe_allow_html=True)
 
+        
+   
     # Warnings
     if meta.get("house_enabled") and (meta.get("house_runs_out_age") is not None) and (meta["house_runs_out_age"] < meta["house_end_age"]):
         st.warning(
@@ -1306,6 +1362,12 @@ if run_btn:
             f"OA runs out at age {meta['oa_runs_out_age']} "
             f"(Year {meta['oa_runs_out_year']}) under your OA withdrawal settings."
         )
+    
+    
+   
+
+
+
     
     # KPI Cards
     end_row = yearly_df.sort_values("Year").iloc[-1]
@@ -1551,6 +1613,8 @@ if run_btn:
             f"  Starting CPF LIFE monthly payout in today's value @2% inflation: "
             f"<b>${start_monthly_today:,.0f}</b>"
         )
+        
+
     st.markdown("---")
     st.markdown(
         "<div style='font-size:16px; line-height:1.6; color:#111;'>" +
